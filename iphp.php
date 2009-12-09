@@ -25,7 +25,6 @@ class iphp
     const OPT_REQUIRE       = 'require';
     const OPT_TMP_DIR       = 'tmp_dir';
     const OPT_PROMPT_HEADER = 'prompt_header';
-    const OPT_PHP_BIN       = 'php_bin';
 
     /**
      * Constructor
@@ -44,6 +43,7 @@ class iphp
         $this->initializeTempFiles();
         $this->initializeAutocompletion();
         $this->initializeTags();
+        $this->initializePHPExecutableLocation();
         $this->requireFiles();
     }
 
@@ -56,7 +56,6 @@ class iphp
                                             self::OPT_REQUIRE       => NULL,
                                             self::OPT_TMP_DIR       => NULL,
                                             self::OPT_PROMPT_HEADER => $this->getPromptHeader(),
-                                            self::OPT_PHP_BIN       => $this->getPhpBin(),
                                           ), $options);
     }
 
@@ -93,20 +92,6 @@ class iphp
             $this->autocompleteList = array_merge($this->autocompleteList, $tags);
         }
     }
-    
-
-    private function initializePHPExecutableLocation()
-    {
-        if(strtoupper(substr(PHP_OS, 0, 3)) === 'WIN')
-        {
-            $phpExecutableName = 'php.exe';
-        }
-        else
-        {
-            $phpExecutableName = 'php';
-        }
-        $this->phpExecutable = PHP_BINDIR . DIRECTORY_SEPARATOR . $phpExecutableName;
-    }
 
     private function requireFiles()
     {
@@ -130,9 +115,10 @@ class iphp
         return empty($this->options['tmp_dir']) ? sys_get_temp_dir() : $this->options['tmp_dir'];
     }
 
-    private function getPhpBin()
+    private function canExecute($file)
     {
-        return empty($this->options['php_bin']) ? (empty($_SERVER['PHP_COMMAND'])?'php':$_SERVER['PHP_COMMAND']) : $this->options['php_bin'];
+        $perms = fileperms($file);
+        return $perms & 0x0400 || $perms & 0x0800;
     }
 
     public function getPromptHeader()
