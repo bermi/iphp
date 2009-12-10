@@ -25,6 +25,7 @@ class iphp
     const OPT_REQUIRE       = 'require';
     const OPT_TMP_DIR       = 'tmp_dir';
     const OPT_PROMPT_HEADER = 'prompt_header';
+    const OPT_PHP_BIN       = 'php_bin';
 
     /**
      * Constructor
@@ -55,6 +56,7 @@ class iphp
                                             self::OPT_REQUIRE       => NULL,
                                             self::OPT_TMP_DIR       => NULL,
                                             self::OPT_PROMPT_HEADER => $this->getPromptHeader(),
+                                            self::OPT_PHP_BIN       => $this->getPhpBin(),
                                           ), $options);
     }
 
@@ -111,6 +113,11 @@ class iphp
     private function tmpDirName()
     {
         return empty($this->options['tmp_dir']) ? sys_get_temp_dir() : $this->options['tmp_dir'];
+    }
+
+    private function getPhpBin()
+    {
+        return empty($this->options['php_bin']) ? (empty($_SERVER['PHP_COMMAND'])?'php':$_SERVER['PHP_COMMAND']) : $this->options['php_bin'];
     }
 
     private function canExecute($file)
@@ -177,6 +184,10 @@ END;
             return;
         }
 
+        if(preg_match('/^(exit|die|quit|bye)(\(\))?;?$/', trim($command))){
+            die("\n");
+        }
+
         if (!empty($command) and function_exists('readline_add_history'))
         {
             readline_add_history($command);
@@ -191,17 +202,18 @@ END;
             $requires = array();
         }
 
+        $inline_command = preg_match('/^((echo )|(foreach|for|if|do|while) *\()/', $command) ? $command : '$_ = '.$command.';';
         $parsedCommand = "<?php
 foreach (" . var_export($requires, true) . " as \$file) {
     require_once(\$file);
 }
 \$__commandState = unserialize(file_get_contents('{$this->tmpFileShellCommandState}'));
-if (is_array(\$__commandState))
-{
+print_r(\$__commandState);
+if (is_array(\$__commandState)){
     extract(\$__commandState);
 }
 ob_start();
-\$_ = {$command};
+$inline_command
 \$__out = ob_get_contents();
 ob_end_clean();
 \$__allData = get_defined_vars();
@@ -216,7 +228,8 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
 
             $result = NULL;
             $output = array();
-            $lastLine = exec("{$_SERVER['PHP_COMMAND']} {$this->tmpFileShellCommand} 2>&1", $output, $result);
+            $php_bin = $this->getPhpBin();
+            $lastLine = exec("{$php_bin} {$this->tmpFileShellCommand} 2>&1", $output, $result);
             if ($result != 0) throw( new Exception("Fatal error executing php: " . join("\n", $output)) );
 
             // boostrap requires environment of command
@@ -227,7 +240,7 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
             }
 
             $lastState = unserialize(file_get_contents($this->tmpFileShellCommandState));
-            $this->lastResult = $lastState['_'];
+            $this->lastResult = @$lastState['_'];
             if ($lastState['__out'])
             {
                 print $lastState['__out'] . "\n";
