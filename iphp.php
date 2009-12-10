@@ -65,6 +65,7 @@ class iphp
         $this->tmpFileShellCommand = $this->tmpFileNamed('command');
         $this->tmpFileShellCommandRequires = $this->tmpFileNamed('requires');
         $this->tmpFileShellCommandState = $this->tmpFileNamed('state');
+    }
 
     private function initializeAutocompletion()
     {
@@ -92,6 +93,20 @@ class iphp
             $this->autocompleteList = array_merge($this->autocompleteList, $tags);
         }
     }
+    
+
+    private function initializePHPExecutableLocation()
+    {
+        if(strtoupper(substr(PHP_OS, 0, 3)) === 'WIN')
+        {
+            $phpExecutableName = 'php.exe';
+        }
+        else
+        {
+            $phpExecutableName = 'php';
+        }
+        $this->phpExecutable = PHP_BINDIR . DIRECTORY_SEPARATOR . $phpExecutableName;
+    }
 
     private function requireFiles()
     {
@@ -118,12 +133,6 @@ class iphp
     private function getPhpBin()
     {
         return empty($this->options['php_bin']) ? (empty($_SERVER['PHP_COMMAND'])?'php':$_SERVER['PHP_COMMAND']) : $this->options['php_bin'];
-    }
-
-    private function canExecute($file)
-    {
-        $perms = fileperms($file);
-        return $perms & 0x0400 || $perms & 0x0800;
     }
 
     public function getPromptHeader()
