@@ -20,12 +20,12 @@ class iphp
     protected $tmpFileShellCommandRequires = null;
     protected $tmpFileShellCommandState = null;
     protected $options = array();
-    protected $phpExecutable = null;
 
     const OPT_TAGS_FILE     = 'tags';
     const OPT_REQUIRE       = 'require';
     const OPT_TMP_DIR       = 'tmp_dir';
     const OPT_PROMPT_HEADER = 'prompt_header';
+    const OPT_PHP_BIN       = 'php_bin';
 
     /**
      * Constructor
@@ -44,7 +44,6 @@ class iphp
         $this->initializeTempFiles();
         $this->initializeAutocompletion();
         $this->initializeTags();
-        $this->initializePHPExecutableLocation();
         $this->requireFiles();
     }
 
@@ -57,6 +56,7 @@ class iphp
                                             self::OPT_REQUIRE       => NULL,
                                             self::OPT_TMP_DIR       => NULL,
                                             self::OPT_PROMPT_HEADER => $this->getPromptHeader(),
+                                            self::OPT_PHP_BIN       => $this->getDefaultPhpBin(),
                                           ), $options);
     }
 
@@ -95,7 +95,7 @@ class iphp
     }
     
 
-    private function initializePHPExecutableLocation()
+    private function getDefaultPhpBin()
     {
         if(strtoupper(substr(PHP_OS, 0, 3)) === 'WIN')
         {
@@ -105,7 +105,7 @@ class iphp
         {
             $phpExecutableName = 'php';
         }
-        $this->phpExecutable = PHP_BINDIR . DIRECTORY_SEPARATOR . $phpExecutableName;
+        return PHP_BINDIR . DIRECTORY_SEPARATOR . $phpExecutableName;
     }
 
     private function requireFiles()
@@ -237,7 +237,9 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
 
             $result = NULL;
             $output = array();
-            $lastLine = exec("{$this->phpExecutable} {$this->tmpFileShellCommand} 2>&1", $output, $result);
+
+            $lastLine = exec("{$this->options[self::OPT_PHP_BIN]} {$this->tmpFileShellCommand} 2>&1", $output, $result);
+
             if ($result != 0) throw( new Exception("Fatal error executing php: " . join("\n", $output)) );
 
             // boostrap requires environment of command
