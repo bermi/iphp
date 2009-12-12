@@ -1,6 +1,8 @@
 <?php
 // vim: set expandtab tabstop=4 shiftwidth=4:
 
+require dirname(__FILE__).DIRECTORY_SEPARATOR.'iphp_commands.php';
+
 /**
  * The iphp shell is an interactive PHP shell for working with your php applications.
  *
@@ -13,13 +15,17 @@
 class iphp
 {
     protected $lastResult = NULL;
-    protected $lastCommand = NULL;
-    protected $prompt = '> ';
+    protected $inputPrompt = 'php> ';
+    protected $outputPrompt = '=> ';
+    protected $inReadline = false;
     protected $autocompleteList = array();
     protected $tmpFileShellCommand = null;
     protected $tmpFileShellCommandRequires = null;
     protected $tmpFileShellCommandState = null;
+    protected $commandEscapeChar = '\\';
     protected $options = array();
+
+    protected $internalCommands = array();
 
     const OPT_TAGS_FILE     = 'tags';
     const OPT_REQUIRE       = 'require';
@@ -38,13 +44,18 @@ class iphp
         $this->initialize($options);
     }
 
-    private function initialize($options = array())
+    public function initialize($options = array())
     {
         $this->initializeOptions($options);
         $this->initializeTempFiles();
         $this->initializeAutocompletion();
         $this->initializeTags();
-        $this->requireFiles();
+        $this->initializeRequires();
+        $this->initializeCommands();
+    }
+    public function options()
+    {
+        return $this->options;
     }
 
     private function initializeOptions($options = array())
@@ -94,6 +105,32 @@ class iphp
         }
     }
     
+    private function initializeRequires()
+    {
+        if ($this->options[self::OPT_REQUIRE])
+        {
+            if (!is_array($this->options[self::OPT_REQUIRE]))
+            {
+                $this->options[self::OPT_REQUIRE] = array($this->options[self::OPT_REQUIRE]);
+            }
+            file_put_contents($this->tmpFileShellCommandRequires, serialize($this->options[self::OPT_REQUIRE]));
+        }
+    }
+
+    private function initializeCommands()
+    {
+        $this->internalCommands = array();
+        foreach (array(new iphp_command_exit, new iphp_command_reload) as $command) {
+            $names = $command->name();
+            if (!is_array($names))
+            {
+                $names = array($names);
+            }
+            foreach ($names as $name) {
+                $this->internalCommands[$name] = $command;
+            }
+        }
+    }
 
     private function getDefaultPhpBin()
     {
@@ -106,18 +143,6 @@ class iphp
             $phpExecutableName = 'php';
         }
         return PHP_BINDIR . DIRECTORY_SEPARATOR . $phpExecutableName;
-    }
-
-    private function requireFiles()
-    {
-        if ($this->options[self::OPT_REQUIRE])
-        {
-            if (!is_array($this->options[self::OPT_REQUIRE]))
-            {
-                $this->options[self::OPT_REQUIRE] = array($this->options[self::OPT_REQUIRE]);
-            }
-            file_put_contents($this->tmpFileShellCommandRequires, serialize($this->options[self::OPT_REQUIRE]));
-        }
     }
 
     private function tmpFileNamed($name)
@@ -139,29 +164,24 @@ Welcome to iphp, the interactive php shell!
 Features include:
 - autocomplete (tab key)
 - readline support w/history
-- automatically wired into your project's autoload
+- require/include support
 
 Enter a php statement at the prompt, and it will be evaluated. The variable \$_ will contain the result.
 
 Example:
 
-> new ArrayObject(array(1,2))
-ArrayObject Object
+{$this->inputPrompt}new ArrayObject(array(1,2))
+{$this->outputPrompt}ArrayObject Object
 (
     [0] => 1
     [1] => 2
 )
 
-> \$_[0] + 1
-2
+{$this->inputPrompt}\$_[0] + 1
+{$this->outputPrompt}2
 
 
 END;
-    }
-
-    public function prompt()
-    {
-        return $this->prompt;
     }
 
     public function historyFile()
@@ -169,29 +189,43 @@ END;
         return getenv('HOME') . '/.iphpHistory';
     }
 
-    public function readlineCallback($command)
-    {
-        if ($command === NULL) exit;
-        $this->lastCommand = $command;
-    }
-
-    public function readlineCompleter($str)
-    {
-        return $this->autocompleteList;
-    }
-
     public function doCommand($command)
     {
-        print "\n";
+        $this->inReadline = false;
+
+        // detect ctl-d
+        if ($command === NULL)
+        {
+            exit(0);
+        }
+
+        // no need to process empty commands
         if (trim($command) == '')
         {
+
             return;
         }
 
-        if(preg_match('/^(exit|die|quit|bye)(\(\))?;?$/', trim($command))){
-            die("\n");
+        // internal command parser
+        $matches = array();
+        if (preg_match("/\s*\\{$this->commandEscapeChar}(\w+)\s?(.*)/", trim($command), $matches))
+        {
+            $internalCommand = $matches[1];
+            $argsString = $matches[2];
+
+            $args = array();
+            if (preg_match_all("/(?:([\w]+)\s?)/", $argsString, $matches))
+            {
+                $args = $matches[1];
+            }
+            if (isset($this->internalCommands[$internalCommand]))
+            {
+                $this->internalCommands[$internalCommand]->run($this, $args);
+            }
+            return;
         }
 
+        // normal command
         if (!empty($command) and function_exists('readline_add_history'))
         {
             readline_add_history($command);
@@ -205,19 +239,25 @@ END;
         {
             $requires = array();
         }
+        
+        if(preg_match('/^echo /', $command)){
+            $command = rtrim($command, ';').';';
+        }else{
+            $command = preg_match('/^(foreach|for|if|do|while) *[\({]/', $command) ? $command : '$_ = '.$command.';';
+        }
 
-        $inline_command = preg_match('/^((echo )|(foreach|for|if|do|while) *\()/', $command) ? $command : '$_ = '.$command.';';
         $parsedCommand = "<?php
 foreach (" . var_export($requires, true) . " as \$file) {
     require_once(\$file);
 }
 \$__commandState = unserialize(file_get_contents('{$this->tmpFileShellCommandState}'));
-print_r(\$__commandState);
-if (is_array(\$__commandState)){
+if (is_array(\$__commandState))
+{
     extract(\$__commandState);
 }
 ob_start();
-$inline_command
+\$_ = '';
+$command
 \$__out = ob_get_contents();
 ob_end_clean();
 \$__allData = get_defined_vars();
@@ -245,7 +285,8 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
             }
 
             $lastState = unserialize(file_get_contents($this->tmpFileShellCommandState));
-            $this->lastResult = @$lastState['_'];
+            $this->lastResult = $lastState['_']; // when running commands like foreach.../echo ... we can't assign it
+            print $this->outputPrompt;
             if ($lastState['__out'])
             {
                 print $lastState['__out'] . "\n";
@@ -269,40 +310,45 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
         }
     }
 
-    private function myReadline()
+    public function fakeReadline()
     {
-        $this->lastCommand = NULL;
-        readline_callback_handler_install($this->prompt, array($this, 'readlineCallback'));
-        while ($this->lastCommand === NULL) {
+        $this->inReadline = true;
+        print $this->inputPrompt;
+        $input =  fgets( STDIN );
+        // catch ctl-d or other errors
+        if ($input === false)
+        {
+            exit(0);
+        }
+        $command = rtrim($input, "\n");
+        $this->doCommand($command);
+    }
+
+    public function readlineCompleter($str)
+    {
+        return $this->autocompleteList;
+    }
+
+    private function realReadline()
+    {
+        $this->inReadline = true;
+        while ($this->inReadline) {
             $w = NULL;
             $e = NULL;
-            $n = @stream_select($r = array(STDIN), $w, $e, NULL);       // @ to silence warning on ctl-c
-            if ($n === false) break;                                    // ctl-c or other signal
+            $r = array(STDIN);
+            $n = @stream_select($r, $w, $e, NULL);       // @ to silence warning on ctl-c
+            // detect ctl-c or other signal (causes stream_select to exit with FALSE)
+            if ($n === false)
+            {
+                readline_callback_handler_remove();
+                print "\n";
+                readline_callback_handler_install($this->inputPrompt, array($this, 'doCommand'));
+            }
             if (in_array(STDIN, $r))
             {
                 readline_callback_read_char();
             }
         }
-        readline_callback_handler_remove();
-        return $this->lastCommand;
-    }
-
-    public function readline()
-    {
-        if (function_exists('readline'))
-        {
-            $command = $this->myReadline();
-        }
-        else
-        {
-            $command = rtrim( fgets( STDIN ), "\n" );
-            // catch ctl-d
-            if (strlen($command) == 0)
-            {
-                exit;
-            }
-        }
-        return $command;
     }
 
     public function stop()
@@ -310,33 +356,50 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
         // no-op
     }
 
-    public static function main($options = array())
+    public function runREPL()
     {
-        $shell = new iphp($options);
-
         // install signal handlers if possible
         declare(ticks = 1);
         if (function_exists('pcntl_signal'))
         {
-            pcntl_signal(SIGINT, array($shell, 'stop'));
+            pcntl_signal(SIGINT, array($this, 'stop'));
         }
 
-        print $shell->options[self::OPT_PROMPT_HEADER];
+        print $this->options[self::OPT_PROMPT_HEADER];
 
         // readline history
         if (function_exists('readline_read_history'))
         {
-            readline_read_history($shell->historyFile());   // doesn't seem to work, even though readline_list_history() shows the read items!
+            readline_read_history($this->historyFile());   // doesn't seem to work, even though readline_list_history() shows the read items!
         }
         // install tab-complete
         if (function_exists('readline_completion_function'))
         {
-            readline_completion_function(array($shell, 'readlineCompleter'));
+            readline_completion_function(array($this, 'readlineCompleter'));
         }
-        while (true)
+
+        // run repl loop.
+        if (function_exists('readline'))
         {
-            $shell->doCommand($shell->readline());
+            // readline automatically re-prints the prompt after the callback runs, so the only way to prevent double-prompts is to do it this way until we figure out something better
+            readline_callback_handler_install($this->inputPrompt, array($this, 'doCommand'));
+            while (true)
+            {
+                $this->realReadline();
+            }
+        }
+        else
+        {
+            while (true)
+            {
+                $this->fakeReadline();
+            }
         }
     }
 
+    public static function main($options = array())
+    {
+        $shell = new iphp($options);
+        $shell->runREPL();
+    }
 }
