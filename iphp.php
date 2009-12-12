@@ -239,6 +239,12 @@ END;
         {
             $requires = array();
         }
+        
+        if(preg_match('/^echo /', $command)){
+            $command = rtrim($command, ';').';';
+        }else{
+            $command = preg_match('/^(foreach|for|if|do|while) *[\({]/', $command) ? $command : '$_ = '.$command.';';
+        }
 
         $parsedCommand = "<?php
 foreach (" . var_export($requires, true) . " as \$file) {
@@ -250,7 +256,8 @@ if (is_array(\$__commandState))
     extract(\$__commandState);
 }
 ob_start();
-\$_ = {$command};
+\$_ = '';
+$command
 \$__out = ob_get_contents();
 ob_end_clean();
 \$__allData = get_defined_vars();
@@ -278,7 +285,7 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
             }
 
             $lastState = unserialize(file_get_contents($this->tmpFileShellCommandState));
-            $this->lastResult = $lastState['_'];
+            $this->lastResult = $lastState['_']; // when running commands like foreach.../echo ... we can't assign it
             print $this->outputPrompt;
             if ($lastState['__out'])
             {
