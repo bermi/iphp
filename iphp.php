@@ -282,6 +282,12 @@ END;
             $requires = array();
         }
 
+        if(preg_match('/^(echo|require) /', $command)){
+            $command = rtrim($command, ';').';';
+        }else{
+            $command = preg_match('/^(foreach|for|if|do|while) *[\({]/', $command) ? $command : '$_ = '.$command.';';
+        }
+
         $parsedCommand = "<?php
 foreach (" . var_export($requires, true) . " as \$file) {
     require_once(\$file);
@@ -292,7 +298,7 @@ if (is_array(\$__commandState))
     extract(\$__commandState);
 }
 ob_start();
-\$_ = {$command};
+$command
 \$__out = ob_get_contents();
 ob_end_clean();
 \$__allData = get_defined_vars();
@@ -320,7 +326,7 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
             }
 
             $lastState = unserialize(file_get_contents($this->tmpFileShellCommandState));
-            $this->lastResult = $lastState['_'];
+            $this->lastResult = isset($lastState['_']) ? $lastState['_'] : '';
             print $this->outputPrompt;
             if ($lastState['__out'])
             {
