@@ -23,15 +23,15 @@ class iphp
     protected $tmpFileShellCommandRequires = null;
     protected $tmpFileShellCommandState = null;
     protected $commandEscapeChar = '\\';
-    protected $options = array();
-
     protected $internalCommands = array();
+    protected $options = array();
 
     const OPT_TAGS_FILE     = 'tags';
     const OPT_REQUIRE       = 'require';
     const OPT_TMP_DIR       = 'tmp_dir';
     const OPT_PROMPT_HEADER = 'prompt_header';
     const OPT_PHP_BIN       = 'php_bin';
+    const OPT_COMMANDS      = 'commands';
 
     /**
      * Constructor
@@ -48,14 +48,38 @@ class iphp
     {
         $this->initializeOptions($options);
         $this->initializeTempFiles();
-        $this->initializeAutocompletion();
-        $this->initializeTags();
         $this->initializeRequires();
         $this->initializeCommands();
+        $this->initializeAutocompletion();
+        $this->initializeTags();
     }
     public function options()
     {
         return $this->options;
+    }
+    public function printHelp()
+    {
+        $uniqueArray = array(); // sadly array_unique doesn't work for arrays of objects. this works, but it slower, but hey it's plenty fast.
+        $pad = 30;
+        print str_pad('alias(es)', $pad, ' ', STR_PAD_RIGHT) . "<help>\n";
+        print str_repeat('-', $pad * 3) . "\n";
+        foreach ($this->internalCommands as $name => $command) {
+            // only show commands once (due to command aliases)
+            if (in_array($command, $uniqueArray)) continue;
+            $uniqueArray[] = $command;
+
+            $aliases = $command->name();
+            if (!is_array($aliases))
+            {
+                $aliases = array($aliases);
+            }
+            $help = $command->help();
+            if (!$help)
+            {
+                $help = "No help available.";
+            }
+            print str_pad($this->commandEscapeChar . join(",{$this->commandEscapeChar}", $aliases), $pad, ' ', STR_PAD_RIGHT) . "{$help}\n";
+        }
     }
 
     private function initializeOptions($options = array())
@@ -68,6 +92,7 @@ class iphp
                                             self::OPT_TMP_DIR       => NULL,
                                             self::OPT_PROMPT_HEADER => $this->getPromptHeader(),
                                             self::OPT_PHP_BIN       => $this->getDefaultPhpBin(),
+                                            self::OPT_COMMANDS      => array(),
                                           ), $options);
     }
 
@@ -85,6 +110,7 @@ class iphp
         $this->autocompleteList = array_merge($this->autocompleteList, get_defined_constants());
         $this->autocompleteList = array_merge($this->autocompleteList, get_declared_classes());
         $this->autocompleteList = array_merge($this->autocompleteList, get_declared_interfaces());
+        $this->autocompleteList = array_merge($this->autocompleteList, array_keys($this->internalCommands));
     }
 
     private function initializeTags()
@@ -119,14 +145,22 @@ class iphp
 
     private function initializeCommands()
     {
+        $commandsToLoad = array('iphp_command_exit', 'iphp_command_reload', 'iphp_command_help');
+        $commandsToLoad = array_merge($commandsToLoad, $this->options[self::OPT_COMMANDS]);
         $this->internalCommands = array();
-        foreach (array(new iphp_command_exit, new iphp_command_reload) as $command) {
+        foreach ($commandsToLoad as $commandName) {
+            $command = new $commandName;
             $names = $command->name();
             if (!is_array($names))
             {
                 $names = array($names);
             }
             foreach ($names as $name) {
+                if (isset($this->internalCommands[$name]))
+                {
+                    print "WARNING: internal command '{$name}' is already registered by " . get_class($this->internalCommands[$name]) . ". Skipping command for " . get_class($command) . ".";
+                    continue;
+                }
                 $this->internalCommands[$name] = $command;
             }
         }
@@ -165,6 +199,7 @@ Features include:
 - autocomplete (tab key)
 - readline support w/history
 - require/include support
+- extensible command system
 
 Enter a php statement at the prompt, and it will be evaluated. The variable \$_ will contain the result.
 
@@ -179,6 +214,9 @@ Example:
 
 {$this->inputPrompt}\$_[0] + 1
 {$this->outputPrompt}2
+
+To call an internal command, prefix the command with the \\ character.
+{$this->inputPrompt}\\help
 
 
 END;
@@ -208,7 +246,7 @@ END;
 
         // internal command parser
         $matches = array();
-        if (preg_match("/\s*\\{$this->commandEscapeChar}(\w+)\s?(.*)/", trim($command), $matches))
+        if (preg_match("/\s*\\{$this->commandEscapeChar}([\w\?]+)\s?(.*)/", trim($command), $matches))
         {
             $internalCommand = $matches[1];
             $argsString = $matches[2];
@@ -221,6 +259,10 @@ END;
             if (isset($this->internalCommands[$internalCommand]))
             {
                 $this->internalCommands[$internalCommand]->run($this, $args);
+            }
+            else
+            {
+                print "Command '{$internalCommand}' does not exist.\n";
             }
             return;
         }
@@ -239,12 +281,6 @@ END;
         {
             $requires = array();
         }
-        
-        if(preg_match('/^echo /', $command)){
-            $command = rtrim($command, ';').';';
-        }else{
-            $command = preg_match('/^(foreach|for|if|do|while) *[\({]/', $command) ? $command : '$_ = '.$command.';';
-        }
 
         $parsedCommand = "<?php
 foreach (" . var_export($requires, true) . " as \$file) {
@@ -256,8 +292,7 @@ if (is_array(\$__commandState))
     extract(\$__commandState);
 }
 ob_start();
-\$_ = '';
-$command
+\$_ = {$command};
 \$__out = ob_get_contents();
 ob_end_clean();
 \$__allData = get_defined_vars();
@@ -285,7 +320,7 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
             }
 
             $lastState = unserialize(file_get_contents($this->tmpFileShellCommandState));
-            $this->lastResult = $lastState['_']; // when running commands like foreach.../echo ... we can't assign it
+            $this->lastResult = $lastState['_'];
             print $this->outputPrompt;
             if ($lastState['__out'])
             {
@@ -378,8 +413,8 @@ file_put_contents('{$this->tmpFileShellCommandState}', serialize(\$__allData));
             readline_completion_function(array($this, 'readlineCompleter'));
         }
 
-        // run repl loop.
-        if (function_exists('readline'))
+        // run repl loop. libedit defines readline but not callback handlers so check for both
+        if (function_exists('readline') && function_exists('readline_callback_handler_install'))
         {
             // readline automatically re-prints the prompt after the callback runs, so the only way to prevent double-prompts is to do it this way until we figure out something better
             readline_callback_handler_install($this->inputPrompt, array($this, 'doCommand'));
